@@ -15,6 +15,8 @@ https://github.com/user-attachments/assets/dc0125e9-2728-4452-8c8e-f8a5f76daa0c
 
 > This started as my first LLM project and is shared as a learning artifact. The architecture notes below include an honest retrospective of what changed as I learned.
 
+**Results:** [docs/results.md](docs/results.md) has the exact commands for a small ablation and a three-model eval, the tables they produce (with confidence intervals), and what they cost. The numbers are pending a live run.
+
 ## What it does
 
 ```
