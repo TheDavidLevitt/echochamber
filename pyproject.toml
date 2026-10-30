@@ -34,6 +34,10 @@ dev = [
 
 [dependency-groups]
 dev = [
+    # Provider SDKs so the retry tests check the real exception types in CI
+    "anthropic>=0.18.0",
+    "google-genai>=1.0.0",
+    "openai>=1.0.0",
     "pytest>=7.0.0",
     "pyyaml>=6.0",  # batch config-loading tests
     "ruff>=0.17.3",
