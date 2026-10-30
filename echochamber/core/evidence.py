@@ -22,7 +22,6 @@ Markdown files can have special sections:
 - Other sections: Treated as regular evidence content
 """
 
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path

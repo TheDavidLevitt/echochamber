@@ -28,6 +28,7 @@ import queue
 import re
 import stat
 import threading
+from collections import Counter
 from pathlib import Path
 
 # The module stays importable without gradio (key helpers are GUI-independent
@@ -46,21 +47,20 @@ try:
 except ImportError:
     pass
 
-from collections import Counter
-
-from .ablation import (
+# Package imports deliberately follow load_dotenv() so keys from .env are in
+# the environment before any module reads them.
+from .ablation import (  # noqa: E402
     AblationConfig,
     Scenario,
-    auto_scenarios,
     format_report,
     run_ablation,
 )
-from .core.costs import estimate_debate_footprint, estimate_run_cost
-from .core.evidence import EvidenceStore
-from .core.runner import DebateSpec, resolve_model, run_debate
-from .core.session import TerminationReason
-from .core.usage import UsageMeter
-from .recommendations import (
+from .core.costs import estimate_debate_footprint, estimate_run_cost  # noqa: E402
+from .core.evidence import EvidenceStore  # noqa: E402
+from .core.runner import DebateSpec, resolve_model, run_debate  # noqa: E402
+from .core.session import TerminationReason  # noqa: E402
+from .core.usage import UsageMeter  # noqa: E402
+from .recommendations import (  # noqa: E402
     credits_callout,
     funding_class,
     load_apa_data,
@@ -1138,7 +1138,7 @@ def _setup_tab():
                 label=f"{provider} — {PROVIDER_ENV_KEYS[provider]}",
                 type="password", scale=3,
             )
-            test_btn = gr.Button(f"Test", size="sm", scale=1)
+            test_btn = gr.Button("Test", size="sm", scale=1)
         result = gr.Markdown("")
         test_btn.click(
             lambda key, p=provider: test_provider_key(p, key),

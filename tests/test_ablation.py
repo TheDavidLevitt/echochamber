@@ -1,6 +1,7 @@
 """Evidence-salience ablation: scenarios, exclusion, resume, salience math."""
 
 import json
+import threading
 
 from helpers import FakeProvider, tool_call_response
 
@@ -118,7 +119,7 @@ def test_campaign_runs_resumes_and_reports(tmp_path):
     # Manifest is valid JSONL
     lines = (tmp_path / "out" / "runs.jsonl").read_text().splitlines()
     assert len(lines) == 4
-    assert all(json.loads(l)["strength"] == 70 for l in lines)
+    assert all(json.loads(line)["strength"] == 70 for line in lines)
 
 
 def test_parse_grid_matches_spec():
@@ -184,7 +185,6 @@ def test_campaign_budget_with_concurrent_debates(tmp_path):
     case = make_case(tmp_path)
     calls = {"n": 0}
     lock_free_counter = threading.Lock()
-    import threading as _t
 
     def factory(provider, model=None, **kw):
         with lock_free_counter:
@@ -213,8 +213,6 @@ def test_campaign_budget_with_concurrent_debates(tmp_path):
     # First wave of 3 runs completes (2,250 tokens > cap), second never starts
     assert report["total_debates"] <= 3
 
-
-import threading
 
 
 def test_shared_meter_budget_is_concurrency_safe():

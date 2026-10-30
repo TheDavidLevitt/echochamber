@@ -33,7 +33,6 @@ except ImportError:
     pass
 
 from .core.runner import DebateSpec, run_debate
-from .core.session import TerminationReason
 from .core.costs import get_model_pricing
 from .providers import create_provider
 

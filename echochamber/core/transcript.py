@@ -1,7 +1,6 @@
 """Transcript logging for court sessions."""
 
 import json
-import os
 import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -146,7 +145,7 @@ class Transcript:
     def __str__(self) -> str:
         """Human-readable transcript."""
         lines = [
-            f"=== COURT TRANSCRIPT ===",
+            "=== COURT TRANSCRIPT ===",
             f"Case: {self.case_topic}",
             f"Started: {self.started_at}",
             "",
@@ -238,7 +237,7 @@ class Transcript:
         lines = []
 
         # Header
-        lines.append(f"# EchoChamber Debate Transcript")
+        lines.append("# EchoChamber Debate Transcript")
         lines.append("")
 
         # Run ID
@@ -314,7 +313,7 @@ class Transcript:
                 lines.append("")
             elif current_round is None and entry.round_number is None:
                 # Opening statements (before rounds)
-                if not any("Opening" in l for l in lines[-5:]):
+                if not any("Opening" in line for line in lines[-5:]):
                     lines.append("### Opening")
                     lines.append("")
 

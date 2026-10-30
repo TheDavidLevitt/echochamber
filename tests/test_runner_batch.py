@@ -45,7 +45,7 @@ def test_run_debate_end_to_end(tmp_path):
     assert "Test topic" in outcome.transcript_path.read_text()
 
     # Every provider call was metered and exported
-    events = [json.loads(l) for l in (tmp_path / "usage.jsonl").read_text().splitlines()]
+    events = [json.loads(line) for line in (tmp_path / "usage.jsonl").read_text().splitlines()]
     assert len(events) == 5  # opening + P + D + eval + ruling
     assert {e["module"] for e in events} == {
         "debate.prosecution", "debate.defense", "debate.moderator",
