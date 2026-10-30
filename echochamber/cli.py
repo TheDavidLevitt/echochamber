@@ -231,14 +231,14 @@ def main():
         topic = args.topic or "Untitled Case"
         case_path = create_case_folder(args.init_case, topic)
         print(f"Created case folder: {case_path}")
-        print(f"\nFolder structure:")
+        print("\nFolder structure:")
         print(f"  {case_path}/")
-        print(f"  ├── shared/      # Evidence visible to all parties")
-        print(f"  ├── prosecution/ # Private prosecution evidence")
-        print(f"  ├── defense/     # Private defense evidence")
-        print(f"  ├── moderator/   # Moderator-only guidance")
-        print(f"  └── README.md    # Instructions")
-        print(f"\nSupported files: .txt, .md, .json, .csv, .pdf")
+        print("  ├── shared/      # Evidence visible to all parties")
+        print("  ├── prosecution/ # Private prosecution evidence")
+        print("  ├── defense/     # Private defense evidence")
+        print("  ├── moderator/   # Moderator-only guidance")
+        print("  └── README.md    # Instructions")
+        print("\nSupported files: .txt, .md, .json, .csv, .pdf")
         return
 
     # Validate required args for debate mode
@@ -322,7 +322,7 @@ def main():
         print("  - GEMINI_API_KEY for Google Gemini")
         print("  - LM Studio running on localhost:1234 for local models")
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top-level CLI guard; prints the full traceback
         print(f"\nError during debate: {e}")
         import traceback
         traceback.print_exc()

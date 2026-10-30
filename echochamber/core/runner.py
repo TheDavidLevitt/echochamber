@@ -5,6 +5,7 @@ session, then saves transcripts. The CLI is a thin argparse layer over this,
 and the batch runner calls it in-process (threads, not subprocesses).
 """
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,6 +24,8 @@ from .transcript import RunConfig
 from .usage import UsageMeter
 from ..providers import create_provider
 from ..roles import get_role_prompt
+
+logger = logging.getLogger(__name__)
 
 
 # Default models per provider (for advocates: prosecution/defense)
@@ -273,8 +276,14 @@ def run_debate(
         try:
             evidence, raw_evidence, strategy_str = _load_evidence(spec, log)
         except Exception as e:
+            # Deliberately broad: a debate without evidence beats no debate.
+            # log() is silent unless verbose, so also warn via logging.
             log(f"\nWarning: Could not load case folder: {e}")
             log("Proceeding without evidence.\n")
+            logger.warning(
+                "Could not load case folder %s; proceeding without evidence",
+                spec.case_folder, exc_info=True,
+            )
 
     # Initialize search tool if enabled
     search_tool = None

@@ -22,13 +22,15 @@ Markdown files can have special sections:
 - Other sections: Treated as regular evidence content
 """
 
-import os
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from .agent import Role
+
+logger = logging.getLogger(__name__)
 
 
 def parse_markdown_sections(content: str) -> dict[str, str]:
@@ -115,7 +117,10 @@ def get_pdf_page_count(file_path: Path) -> int:
         count = len(doc)
         doc.close()
         return count
-    except Exception:
+    except (ImportError, OSError, RuntimeError, ValueError):
+        # pymupdf missing, or the file is unreadable/not a PDF (pymupdf's
+        # FileDataError is a RuntimeError)
+        logger.debug("Could not count pages in %s", file_path, exc_info=True)
         return 0
 
 
@@ -258,7 +263,10 @@ class EvidenceStore:
                         owner=owner,
                     ))
             except Exception as e:
+                # Per-file guard: one bad file (encoding, corrupt PDF, missing
+                # extra, ...) is skipped instead of failing the whole case.
                 print(f"Warning: Could not load {file_path}: {e}")
+                logger.debug("Evidence load failed for %s", file_path, exc_info=True)
 
         return evidence_list
 

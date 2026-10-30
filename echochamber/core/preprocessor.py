@@ -10,12 +10,15 @@ The preprocessor can use the same LLM providers as the debate agents.
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable
 
 from .evidence import Evidence, EvidenceStore
+
+logger = logging.getLogger(__name__)
 
 
 class ContextStrategy(Enum):
@@ -91,7 +94,9 @@ class DocumentPreprocessor:
     Preprocesses documents based on configured strategy.
 
     For summarization, requires an LLM provider.
-    For RAG, uses local embeddings (sentence-transformers).
+    For RAG, chunks go into an in-memory ChromaDB collection using Chroma's
+    default embedding function (all-MiniLM-L6-v2 run locally via ONNX
+    Runtime, downloaded on first use); sentence-transformers is not used.
     """
 
     def __init__(
@@ -244,8 +249,10 @@ Provide a summary of no more than {self.config.summary_max_tokens * 4} character
             try:
                 data = json.loads(cache_file.read_text())
                 return data.get("content")
-            except Exception:
-                pass
+            except (OSError, ValueError, AttributeError) as e:
+                # Unreadable, corrupt (ValueError covers JSON and Unicode
+                # decode errors) or not a JSON object: treat as a cache miss.
+                logger.warning("Ignoring unreadable cache file %s: %s", cache_file, e)
         return None
 
     def _save_cache(self, key: str, content: str) -> None:
@@ -255,8 +262,9 @@ Provide a summary of no more than {self.config.summary_max_tokens * 4} character
         cache_file = self.config.cache_dir / f"{key}.json"
         try:
             cache_file.write_text(json.dumps({"content": content}))
-        except Exception:
-            pass
+        except OSError as e:
+            # Caching is an optimization; a failed write only costs a recompute.
+            logger.warning("Could not write cache file %s: %s", cache_file, e)
 
 
 @dataclass

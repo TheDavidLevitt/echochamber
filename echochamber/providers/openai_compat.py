@@ -5,11 +5,14 @@ protocol; the concrete providers only differ in how the client is built.
 """
 
 import json
+import logging
 import time
 from typing import Callable, Optional
 
 from .base import LLMProvider, LLMResponse, Message, ToolCall, ToolDef
-from .retry import call_with_retries
+from .retry import call_with_retries, provider_error_types
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -79,8 +82,9 @@ class OpenAICompatProvider(LLMProvider):
         if on_delta and not tools:
             try:
                 return self._complete_streaming(kwargs, on_delta)
-            except Exception:
-                pass  # endpoint may not support streaming — fall through
+            except provider_error_types() as e:
+                # Endpoint may not support streaming — fall through
+                logger.info("Streaming request failed (%s); retrying without streaming", e)
         if tools:
             kwargs["tools"] = [
                 {

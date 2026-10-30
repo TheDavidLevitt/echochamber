@@ -1,6 +1,7 @@
 """Evidence-salience ablation: scenarios, exclusion, resume, salience math."""
 
 import json
+import threading
 
 from helpers import FakeProvider, tool_call_response
 
@@ -8,8 +9,10 @@ from echochamber.ablation import (
     AblationConfig,
     Scenario,
     auto_scenarios,
+    format_report,
     run_ablation,
     signed_margin,
+    summarize,
 )
 from echochamber.core.runner import DebateSpec, run_debate
 from echochamber.ui import parse_grid
@@ -97,6 +100,8 @@ def test_campaign_runs_resumes_and_reports(tmp_path):
     assert stats["prosecution_win_rate"] == 1.0
     assert stats["mean_margin"] == 70.0
     assert stats["salience_margin_delta"] == 0.0  # same outcome everywhere
+    assert stats["reading"] == "no detectable effect"
+    assert report["multiple_comparisons"]["method"] == "holm-bonferroni"
 
     # Resume: everything already in the manifest → zero new runs
     progress = []
@@ -118,7 +123,7 @@ def test_campaign_runs_resumes_and_reports(tmp_path):
     # Manifest is valid JSONL
     lines = (tmp_path / "out" / "runs.jsonl").read_text().splitlines()
     assert len(lines) == 4
-    assert all(json.loads(l)["strength"] == 70 for l in lines)
+    assert all(json.loads(line)["strength"] == 70 for line in lines)
 
 
 def test_parse_grid_matches_spec():
@@ -184,7 +189,6 @@ def test_campaign_budget_with_concurrent_debates(tmp_path):
     case = make_case(tmp_path)
     calls = {"n": 0}
     lock_free_counter = threading.Lock()
-    import threading as _t
 
     def factory(provider, model=None, **kw):
         with lock_free_counter:
@@ -214,8 +218,6 @@ def test_campaign_budget_with_concurrent_debates(tmp_path):
     assert report["total_debates"] <= 3
 
 
-import threading
-
 
 def test_shared_meter_budget_is_concurrency_safe():
     """Many threads recording into one hard-limited meter all stop."""
@@ -242,3 +244,53 @@ def test_shared_meter_budget_is_concurrency_safe():
     tin, tout = meter.total_tokens()
     # No runaway: the crossing call in each thread is recorded, nothing more
     assert tin + tout <= 10_000 + 8 * 200
+
+
+def _records(scenario, margins):
+    return [
+        {
+            "scenario": scenario, "run": i, "exclude": [],
+            "winner": "prosecution" if m > 0 else "defense" if m < 0 else "draw",
+            "strength": abs(m), "margin": float(m), "termination": "moderator_decision",
+            "tokens": 0, "cost_usd": 0.0, "transcript": "",
+        }
+        for i, m in enumerate(margins)
+    ]
+
+
+def test_salience_reading_requires_a_significant_interval():
+    """Only a delta whose CI excludes 0 after Holm correction gets a direction."""
+    baseline = [-20, -10, -15, -5, -25, -10, -20, -15, -10, -5]
+    strong = [40, 55, 35, 60, 45, 50, 40, 65, 30, 50]      # big shift toward P
+    null = [-15, -5, -25, -10, -20, -10, -5, -15, -20, -10]  # same as baseline
+    records = (
+        _records("baseline", baseline)
+        + _records("minus key.txt", strong)
+        + _records("minus filler.txt", null)
+    )
+    scenarios = [
+        Scenario("baseline", 10, []),
+        Scenario("minus key.txt", 10, ["key.txt"]),
+        Scenario("minus filler.txt", 10, ["filler.txt"]),
+    ]
+    config = AblationConfig(case_folder="c", topic="T", position="P")
+    report = summarize(records, scenarios, "baseline", config)
+
+    key = report["scenarios"]["minus key.txt"]
+    assert key["reading"] == "removal helps prosecution"
+    assert key["salience_ci95"][0] > 0
+    assert key["salience_p_holm"] < 0.05
+    assert key["salience_p_holm"] >= key["salience_p"]  # correction never helps
+
+    filler = report["scenarios"]["minus filler.txt"]
+    assert filler["reading"] == "no detectable effect"
+    assert filler["salience_ci95"][0] < 0 < filler["salience_ci95"][1]
+
+    assert report["multiple_comparisons"]["family_size"] == 2
+    assert "reading" not in report["scenarios"]["baseline"]
+
+    # Deterministic: the same records produce the same report
+    assert summarize(records, scenarios, "baseline", config) == report
+
+    md = format_report(report)
+    assert "95% CI" in md and "Holm" in md

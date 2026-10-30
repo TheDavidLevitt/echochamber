@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 import json
 import concurrent.futures
@@ -26,7 +27,7 @@ try:
 except ImportError:
     pass
 
-from .core.costs import estimate_run_cost, format_cost_estimate, get_model_pricing
+from .core.costs import estimate_run_cost
 from .core.runner import (
     DEFAULT_MODELS as DEFAULT_ADVOCATE_MODELS,
     DEFAULT_MODERATOR_MODELS,
@@ -34,6 +35,8 @@ from .core.runner import (
     run_debate,
 )
 from .core.session import TerminationReason
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -202,6 +205,8 @@ def run_single_variation(variation: RunVariation, output_dir: Path) -> dict:
             "error": "",
         }
     except Exception as e:
+        # Per-run guard: one failed variation is reported, not fatal.
+        logger.warning("Batch run %s failed", variation.name, exc_info=True)
         return {
             "name": variation.name,
             "success": False,

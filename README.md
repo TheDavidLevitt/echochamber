@@ -6,7 +6,7 @@
 https://github.com/user-attachments/assets/79130956-d2f3-47c2-b596-e12a99ce815d
 
 ### 📹 Evidence ablation: type evidence, run an 80-debate salience campaign
-See [docs/demo-ablation.mp4](docs/demo-ablation.mp4) — or the walkthrough below.
+[Watch demo-ablation.mp4](https://github.com/TheDavidLevitt/echochamber/releases/download/media-v1/demo-ablation.mp4) (2.4 MB) — or read the walkthrough below. All demo videos are attached to the [Demo media release](https://github.com/TheDavidLevitt/echochamber/releases/tag/media-v1).
 
 ### 📹 Setup & configuration walkthrough
 https://github.com/user-attachments/assets/dc0125e9-2728-4452-8c8e-f8a5f76daa0c
@@ -14,6 +14,8 @@ https://github.com/user-attachments/assets/dc0125e9-2728-4452-8c8e-f8a5f76daa0c
 **A multi-LLM courtroom debate environment.** Give it a topic and a position, and three LLM agents — Prosecution, Defense, and a Moderator/Judge — argue it out over structured rounds until a verdict is reached. Each agent can run on a different provider, so you can pit Claude against Llama with DeepSeek on the bench.
 
 > This started as my first LLM project and is shared as a learning artifact. The architecture notes below include an honest retrospective of what changed as I learned.
+
+**Results:** [docs/results.md](docs/results.md) has the exact commands for a small ablation and a three-model eval, the tables they produce (with confidence intervals), and what they cost. The numbers are pending a live run.
 
 ## What it does
 
@@ -107,7 +109,7 @@ uv run python -m echochamber.evals \
   --apa-findings findings.jsonl
 ```
 
-Outputs a JSON report (win/loss/draw per matchup, score, actual cost) and optionally appends an AgentStable finding (`{kind, lab, model, headline, why, priceIn, priceOut}`) that a procurement agent can ingest — closing the loop: AgentStable recommends models for debates, and debates feed evidence back to AgentStable. Evals are noisy at small N; use 3+ topics and expect ~0.5 for equal models.
+Outputs a JSON report (win/loss/draw per matchup, score, actual cost) and optionally appends an AgentStable finding (`{kind, lab, model, headline, why, priceIn, priceOut}`) that a procurement agent can ingest — closing the loop: AgentStable recommends models for debates, and debates feed evidence back to AgentStable. Evals are noisy at small N; use 3+ topics and expect ~0.5 for equal models. The report puts a 95% bootstrap confidence interval on the score (vs 0.5) and on the judge's mean margin toward the candidate (vs 0), resampling whole topics so each side-swapped pair stays together, with Holm correction across the two tests; it only calls a winner when the interval excludes the null.
 
 ### AgentStable model recommendations
 
@@ -161,6 +163,12 @@ condition). Verdicts are noisy — treat `--runs 20` as the floor for real
 conclusions, and remember models may know public facts from pretraining;
 ablation is sharpest on private or synthetic case facts.
 
+Each salience Δ is reported with a 95% bootstrap confidence interval, and
+because one report compares many documents against the same baseline, the
+p-values are Holm–Bonferroni corrected across that family. A document is
+only labeled as helping one side when its effect survives both; otherwise
+the report says "no detectable effect".
+
 ### Batch runs
 
 ```bash
@@ -187,6 +195,7 @@ echochamber/
 ├── cli.py                  # Thin argparse layer over the runner
 ├── ui.py                   # Gradio GUI: live status, token/cost ticker, stop button
 ├── evals.py                # Debates-as-benchmarks harness → report + AgentStable finding
+├── ablation.py             # Evidence-salience campaigns: leave-one-out, resumable, CIs
 ├── recommendations.py      # AgentStable export → top-2 model picks per debate role
 ├── batch.py                # Thread-pool multi-run orchestration + cost gates
 ├── core/
@@ -198,14 +207,15 @@ echochamber/
 │   ├── evidence.py         # Case folder loading (txt/md/json/csv/pdf)
 │   ├── preprocessor.py     # full / summarize / RAG context strategies
 │   ├── transcript.py       # Markdown + JSON transcript writing
+│   ├── stats.py            # Bootstrap CIs + Holm correction for ablation/eval reports
 │   └── costs.py            # Estimates, priced from data/pricing.json
 ├── data/pricing.json       # Per-model $/1M token table (edit freely)
 ├── providers/
 │   ├── base.py             # Message / ToolDef / ToolCall / LLMResponse protocol
-│   ├── retry.py            # Centralized exponential backoff
+│   ├── retry.py            # Centralized retry: typed SDK errors, Retry-After, full-jitter backoff
 │   ├── openai_compat.py    # One implementation for OpenAI, Together, LM Studio
 │   ├── anthropic.py        # Native tools via tool_use/tool_result blocks
-│   └── gemini.py           # Text-only (sentinel fallback) on the legacy SDK
+│   └── gemini.py           # google-genai SDK (Gemini API or Vertex AI), native tools + streaming
 ├── roles/prompts.py        # Prosecution / Defense / Moderator system prompts
 └── tools/search.py         # DuckDuckGo search + web_search ToolDef + sentinel parsing
 tests/                      # Fake-provider suite for the orchestration logic
@@ -228,7 +238,7 @@ What this project taught me, now folded back in:
 - ~~Hardcoded pricing in code~~ → `data/pricing.json`.
 - ~~Per-callsite try/except~~ → centralized retry with backoff.
 
-Still open: Gemini native tools (needs the `google-genai` SDK migration), streaming output, and a live pricing source instead of a static table.
+Since shipped: Gemini native tools (via the `google-genai` SDK) and token streaming for every provider. Still open: a live pricing source instead of a static table.
 
 ## License
 

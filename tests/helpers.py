@@ -1,6 +1,6 @@
 """Test doubles: a scripted LLM provider and a canned search tool."""
 
-from echochamber.providers import LLMProvider, LLMResponse, Message, ToolCall, ToolDef
+from echochamber.providers import LLMProvider, LLMResponse, ToolCall
 
 
 class FakeProvider(LLMProvider):

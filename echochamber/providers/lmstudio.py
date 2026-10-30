@@ -1,8 +1,12 @@
 """LM Studio local provider (OpenAI-compatible API)."""
 
+import logging
 from typing import Optional
 
 from .openai_compat import OpenAICompatProvider
+from .retry import provider_error_types
+
+logger = logging.getLogger(__name__)
 
 
 def get_lmstudio_model(base_url: str = "http://localhost:1234/v1") -> Optional[str]:
@@ -14,12 +18,17 @@ def get_lmstudio_model(base_url: str = "http://localhost:1234/v1") -> Optional[s
     """
     try:
         from openai import OpenAI
+    except ImportError:
+        return None
+    try:
         client = OpenAI(api_key="lm-studio", base_url=base_url)
         models = client.models.list()
         if models.data:
             return models.data[0].id
-    except Exception:
-        pass
+    except provider_error_types() as e:
+        # Not fatal: the provider keeps its placeholder model name and the
+        # first real request reports the connection problem.
+        logger.debug("LM Studio model auto-detect failed at %s: %s", base_url, e)
     return None
 
 

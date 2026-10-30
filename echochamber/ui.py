@@ -23,11 +23,13 @@ live procurement recommendations instead of the bundled sample.
 """
 
 import json
+import logging
 import os
 import queue
 import re
 import stat
 import threading
+from collections import Counter
 from pathlib import Path
 
 # The module stays importable without gradio (key helpers are GUI-independent
@@ -46,26 +48,27 @@ try:
 except ImportError:
     pass
 
-from collections import Counter
-
-from .ablation import (
+# Package imports deliberately follow load_dotenv() so keys from .env are in
+# the environment before any module reads them.
+from .ablation import (  # noqa: E402
     AblationConfig,
     Scenario,
-    auto_scenarios,
     format_report,
     run_ablation,
 )
-from .core.costs import estimate_debate_footprint, estimate_run_cost
-from .core.evidence import EvidenceStore
-from .core.runner import DebateSpec, resolve_model, run_debate
-from .core.session import TerminationReason
-from .core.usage import UsageMeter
-from .recommendations import (
+from .core.costs import estimate_debate_footprint, estimate_run_cost  # noqa: E402
+from .core.evidence import EvidenceStore  # noqa: E402
+from .core.runner import DebateSpec, resolve_model, run_debate  # noqa: E402
+from .core.session import TerminationReason  # noqa: E402
+from .core.usage import UsageMeter  # noqa: E402
+from .recommendations import (  # noqa: E402
     credits_callout,
     funding_class,
     load_apa_data,
     recommend_for_debate,
 )
+
+logger = logging.getLogger(__name__)
 
 PROVIDERS = ["lmstudio", "anthropic", "openai", "together", "gemini"]
 DEFAULT_PROVIDER = os.environ.get("ECHOCHAMBER_DEFAULT_PROVIDER", "lmstudio")
@@ -191,6 +194,9 @@ try:
     _apa = load_apa_data()
     _recs = recommend_for_debate(_apa)
 except Exception:
+    # Startup guard: recommendations are optional and must never stop the
+    # GUI from loading, whatever shape the external export is in.
+    logger.warning("AgentStable recommendations unavailable", exc_info=True)
     _apa, _recs = None, {}
 
 
@@ -239,6 +245,8 @@ def estimate_md(pros_provider, pros_model, def_provider, def_model,
             *models, max_rounds=int(rounds or 1), iterations=int(iterations or 1),
         )
     except Exception as e:
+        # UI guard: the estimate is advisory and reruns on every input change.
+        logger.debug("Debate estimate failed", exc_info=True)
         return f"_Estimate unavailable: {e}_"
 
     minutes = fp["seconds"] / 60
@@ -383,7 +391,27 @@ def test_provider_key(provider: str, key: str) -> str:
     except ImportError as e:
         return f"❌ {provider}: SDK not installed ({e.name}) — run: uv sync --extra all"
     except Exception as e:
+        # UI guard: any failure is the answer to "does this key work?"
+        logger.debug("Key test failed for %s", provider, exc_info=True)
         return f"❌ {provider}: {str(e)[:200]}"
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` so it is never readable by other users.
+
+    The file is created with mode 0600 in the same call that opens it, so
+    there is no window where it exists with default (often world-readable)
+    permissions. fchmod also tightens a pre-existing file that was looser.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+    if hasattr(os, "fchmod"):  # POSIX (Windows only from Python 3.13)
+        try:
+            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        except BaseException:
+            os.close(fd)
+            raise
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def save_keys(anthropic_key: str, openai_key: str, together_key: str, gemini_key: str):
@@ -410,8 +438,7 @@ def save_keys(anthropic_key: str, openai_key: str, together_key: str, gemini_key
             lines.append(f"{env_key}={value}")
         os.environ[env_key] = value  # effective immediately, no restart
 
-    ENV_FILE.write_text("\n".join(lines) + "\n")
-    ENV_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    _write_private(ENV_FILE, "\n".join(lines) + "\n")
     saved = ", ".join(new_values)
     return key_overview_md(), f"✅ Saved {saved} to {ENV_FILE} (permissions 600). Empty fields were left unchanged."
 
@@ -471,6 +498,8 @@ def inspect_evidence(path: str) -> str:
         store = EvidenceStore.load(path)
         return f"```\n{store.summary()}\n```"
     except Exception as e:
+        # UI guard: shown to the user in place of the preview.
+        logger.debug("Case folder preview failed for %s", path, exc_info=True)
         return f"❌ Could not load `{path}`: {e}"
 
 
@@ -561,6 +590,8 @@ def run_debate_ui(topic, position, pros_provider, pros_model, pros_instr,
             record["transcript"] = str(outcomes[-1].transcript_path or "") if outcomes else ""
             events.put(("done", outcomes))
         except Exception as e:
+            # Background-thread guard: report to the page, keep the traceback.
+            logger.warning("Debate worker failed", exc_info=True)
             record["status"] = f"error: {str(e)[:120]}"
             events.put(("error", str(e)))
 
@@ -777,6 +808,8 @@ def load_case_evidence(case_folder):
             + ", ".join(labels),
         )
     except Exception as e:
+        # UI guard: shown to the user next to the Load button.
+        logger.debug("Ablation evidence load failed", exc_info=True)
         return gr.skip(), gr.skip(), [], f"❌ {e}"
 
 
@@ -819,6 +852,8 @@ def ablation_estimate_md(provider, model, judge_provider, judge_model,
                 f"~{fp['tokens']:,} tokens · {cost_str} · {time_str} sequential "
                 f"(divide by parallelism)" + _ESTIMATE_DISCLAIMER)
     except Exception as e:
+        # UI guard: the estimate is advisory and reruns on every input change.
+        logger.debug("Ablation estimate failed", exc_info=True)
         return f"_Estimate unavailable: {e}_"
 
 
@@ -875,6 +910,8 @@ def run_ablation_ui(case_folder, topic, position, provider, model,
             done_box["report"] = report
             events.put(("done", report))
         except Exception as e:
+            # Background-thread guard: report to the page, keep the traceback.
+            logger.warning("Ablation worker failed", exc_info=True)
             events.put(("error", str(e)))
 
     threading.Thread(target=worker, daemon=True).start()
@@ -1138,7 +1175,7 @@ def _setup_tab():
                 label=f"{provider} — {PROVIDER_ENV_KEYS[provider]}",
                 type="password", scale=3,
             )
-            test_btn = gr.Button(f"Test", size="sm", scale=1)
+            test_btn = gr.Button("Test", size="sm", scale=1)
         result = gr.Markdown("")
         test_btn.click(
             lambda key, p=provider: test_provider_key(p, key),
