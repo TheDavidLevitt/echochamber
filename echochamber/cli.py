@@ -322,7 +322,7 @@ def main():
         print("  - GEMINI_API_KEY for Google Gemini")
         print("  - LM Studio running on localhost:1234 for local models")
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top-level CLI guard; prints the full traceback
         print(f"\nError during debate: {e}")
         import traceback
         traceback.print_exc()

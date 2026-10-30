@@ -23,6 +23,7 @@ live procurement recommendations instead of the bundled sample.
 """
 
 import json
+import logging
 import os
 import queue
 import re
@@ -66,6 +67,8 @@ from .recommendations import (  # noqa: E402
     load_apa_data,
     recommend_for_debate,
 )
+
+logger = logging.getLogger(__name__)
 
 PROVIDERS = ["lmstudio", "anthropic", "openai", "together", "gemini"]
 DEFAULT_PROVIDER = os.environ.get("ECHOCHAMBER_DEFAULT_PROVIDER", "lmstudio")
@@ -191,6 +194,9 @@ try:
     _apa = load_apa_data()
     _recs = recommend_for_debate(_apa)
 except Exception:
+    # Startup guard: recommendations are optional and must never stop the
+    # GUI from loading, whatever shape the external export is in.
+    logger.warning("AgentStable recommendations unavailable", exc_info=True)
     _apa, _recs = None, {}
 
 
@@ -239,6 +245,8 @@ def estimate_md(pros_provider, pros_model, def_provider, def_model,
             *models, max_rounds=int(rounds or 1), iterations=int(iterations or 1),
         )
     except Exception as e:
+        # UI guard: the estimate is advisory and reruns on every input change.
+        logger.debug("Debate estimate failed", exc_info=True)
         return f"_Estimate unavailable: {e}_"
 
     minutes = fp["seconds"] / 60
@@ -383,6 +391,8 @@ def test_provider_key(provider: str, key: str) -> str:
     except ImportError as e:
         return f"❌ {provider}: SDK not installed ({e.name}) — run: uv sync --extra all"
     except Exception as e:
+        # UI guard: any failure is the answer to "does this key work?"
+        logger.debug("Key test failed for %s", provider, exc_info=True)
         return f"❌ {provider}: {str(e)[:200]}"
 
 
@@ -471,6 +481,8 @@ def inspect_evidence(path: str) -> str:
         store = EvidenceStore.load(path)
         return f"```\n{store.summary()}\n```"
     except Exception as e:
+        # UI guard: shown to the user in place of the preview.
+        logger.debug("Case folder preview failed for %s", path, exc_info=True)
         return f"❌ Could not load `{path}`: {e}"
 
 
@@ -561,6 +573,8 @@ def run_debate_ui(topic, position, pros_provider, pros_model, pros_instr,
             record["transcript"] = str(outcomes[-1].transcript_path or "") if outcomes else ""
             events.put(("done", outcomes))
         except Exception as e:
+            # Background-thread guard: report to the page, keep the traceback.
+            logger.warning("Debate worker failed", exc_info=True)
             record["status"] = f"error: {str(e)[:120]}"
             events.put(("error", str(e)))
 
@@ -777,6 +791,8 @@ def load_case_evidence(case_folder):
             + ", ".join(labels),
         )
     except Exception as e:
+        # UI guard: shown to the user next to the Load button.
+        logger.debug("Ablation evidence load failed", exc_info=True)
         return gr.skip(), gr.skip(), [], f"❌ {e}"
 
 
@@ -819,6 +835,8 @@ def ablation_estimate_md(provider, model, judge_provider, judge_model,
                 f"~{fp['tokens']:,} tokens · {cost_str} · {time_str} sequential "
                 f"(divide by parallelism)" + _ESTIMATE_DISCLAIMER)
     except Exception as e:
+        # UI guard: the estimate is advisory and reruns on every input change.
+        logger.debug("Ablation estimate failed", exc_info=True)
         return f"_Estimate unavailable: {e}_"
 
 
@@ -875,6 +893,8 @@ def run_ablation_ui(case_folder, topic, position, provider, model,
             done_box["report"] = report
             events.put(("done", report))
         except Exception as e:
+            # Background-thread guard: report to the page, keep the traceback.
+            logger.warning("Ablation worker failed", exc_info=True)
             events.put(("error", str(e)))
 
     threading.Thread(target=worker, daemon=True).start()

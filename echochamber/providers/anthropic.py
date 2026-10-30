@@ -1,11 +1,14 @@
 """Anthropic Claude provider."""
 
+import logging
 import os
 import time
 from typing import Callable, Optional
 
 from .base import LLMProvider, LLMResponse, Message, ToolCall, ToolDef
-from .retry import call_with_retries
+from .retry import call_with_retries, provider_error_types
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicProvider(LLMProvider):
@@ -92,8 +95,9 @@ class AnthropicProvider(LLMProvider):
         if on_delta and not tools:
             try:
                 return self._complete_streaming(kwargs, on_delta)
-            except Exception:
-                pass  # fall back to a normal request
+            except provider_error_types() as e:
+                # Fall back to a normal (non-streaming) request
+                logger.info("Streaming request failed (%s); retrying without streaming", e)
         if tools:
             kwargs["tools"] = [
                 {

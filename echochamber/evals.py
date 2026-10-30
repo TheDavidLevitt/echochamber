@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -36,6 +37,8 @@ from .core.runner import DebateSpec, run_debate
 from .core.costs import get_model_pricing
 from .core.stats import bootstrap_cluster_mean, holm_adjust
 from .providers import create_provider
+
+logger = logging.getLogger(__name__)
 
 
 def default_topics() -> list[dict]:
@@ -244,6 +247,9 @@ def run_eval(
                     ),
                 )
             except Exception as e:
+                # Per-debate guard: a failed matchup is scored as a draw.
+                logger.warning("Eval debate failed: %s (candidate as %s)",
+                               topic["topic"], side, exc_info=True)
                 matchup = Matchup(
                     topic=topic["topic"],
                     candidate_side=side,

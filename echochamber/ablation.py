@@ -33,6 +33,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -50,6 +51,8 @@ from .core.evidence import EvidenceStore
 from .core.runner import DebateSpec, run_debate
 from .core.stats import bootstrap_mean_diff, holm_adjust
 from .providers import create_provider
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -253,6 +256,10 @@ def run_ablation(
                 "transcript": str(outcome.transcript_path or ""),
             }
         except Exception as e:
+            # Per-debate guard: the error is recorded in the manifest and the
+            # campaign continues.
+            logger.warning("Ablation debate failed: %s run %d",
+                           scenario.name, run_idx, exc_info=True)
             record = {
                 "scenario": scenario.name,
                 "run": run_idx,

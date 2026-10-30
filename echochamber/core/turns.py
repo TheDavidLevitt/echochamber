@@ -11,11 +11,14 @@ Two transports for the same behavior:
 Either way, search results reach the agent within the same turn.
 """
 
+import logging
 from typing import Callable, Optional
 
 from ..providers import Message
 from .agent import Agent
 from .usage import TokenBudgetExceeded
+
+logger = logging.getLogger(__name__)
 
 # Iterations beyond the search budget, to give the agent a closing call
 # after its last results arrive.
@@ -53,9 +56,14 @@ def run_agent_turn(
         except TokenBudgetExceeded:
             raise  # a budget stop must not trigger the (token-spending) fallback
         except Exception as e:
-            # Some endpoints (notably local models via LM Studio) reject
-            # tool-enabled requests; degrade to the sentinel transport.
+            # Deliberately broad: providers are pluggable and some endpoints
+            # (notably local models via LM Studio) reject tool-enabled
+            # requests in their own ways; degrade to the sentinel transport.
             log(f"  [{agent.name}: native tools failed ({e}); falling back to text protocol]")
+            logger.info(
+                "%s: native tools failed; falling back to text protocol",
+                agent.name, exc_info=True,
+            )
 
     text = agent.respond_full(messages, on_delta=on_delta).content
     if not search_enabled:

@@ -4,6 +4,7 @@ Agents can search the web during their turns to find supporting evidence
 or counter opposing arguments.
 """
 
+import logging
 import re
 import time
 import unicodedata
@@ -11,6 +12,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..providers.base import ToolDef
+
+logger = logging.getLogger(__name__)
 
 # Native tool definition, for providers that support tool calling.
 # Providers that don't are driven via the [SEARCH: query] sentinel below.
@@ -137,6 +140,9 @@ class WebSearchTool:
                             for r in results
                         ]
                 except Exception as e:
+                    # Broad on purpose: ddgs raises its own and network errors,
+                    # and a failed search must never end the debate.
+                    logger.debug("Search attempt failed for %r", attempt_query, exc_info=True)
                     error_str = str(e).lower()
                     # Reset client on connection errors
                     if "connection" in error_str or "broken pipe" in error_str:

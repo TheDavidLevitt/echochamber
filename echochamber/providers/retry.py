@@ -85,6 +85,16 @@ def _error_types() -> _ErrorTypes:
     return _ErrorTypes(status=tuple(status), transient=tuple(transient))
 
 
+def provider_error_types() -> tuple:
+    """Every API and transport error type the installed SDKs can raise.
+
+    For handlers that should catch "the provider call failed" and nothing
+    else (programming errors still propagate).
+    """
+    types = _error_types()
+    return tuple(t for t, _ in types.status) + types.transient
+
+
 def status_code(exc: BaseException) -> Optional[int]:
     """HTTP status carried by a typed SDK error, or None."""
     for exc_type, attr in _error_types().status:

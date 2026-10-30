@@ -1,5 +1,6 @@
 """Court session orchestrator."""
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -12,6 +13,8 @@ from .preprocessor import ProcessedEvidenceStore, ContextStrategy
 from .turns import run_agent_turn
 from .usage import TokenBudgetExceeded
 from ..providers import Message, ToolDef
+
+logger = logging.getLogger(__name__)
 
 
 class TerminationReason(Enum):
@@ -326,7 +329,10 @@ The debate ends when:
             self._log("Session cancelled by user.")
             termination_reason = TerminationReason.CANCELLED
         except Exception as e:
+            # Top-level session guard: any failure ends the debate with an
+            # ERROR termination and a transcript, instead of losing the run.
             self._log(f"Error during session: {e}")
+            logger.warning("Session ended by error", exc_info=True)
             termination_reason = TerminationReason.ERROR
             self.transcript.add_entry(
                 speaker="SYSTEM",
@@ -547,7 +553,10 @@ End the debate (continue_debate = false) only if:
         except TokenBudgetExceeded:
             raise  # a budget stop must not trigger the (token-spending) fallback
         except Exception as e:
+            # Deliberately broad: any failure of the tool path degrades to the
+            # text protocol (see turns.run_agent_turn).
             self._log(f"  [structured evaluation failed ({e}); using text protocol]")
+            logger.info("Structured evaluation failed; using text protocol", exc_info=True)
             return None
 
         call = next(
@@ -721,7 +730,10 @@ When ready, submit your complete final ruling with the submit_verdict tool.
         except TokenBudgetExceeded:
             raise  # a budget stop must not trigger the (token-spending) fallback
         except Exception as e:
+            # Deliberately broad: any failure of the tool path degrades to the
+            # text protocol (see turns.run_agent_turn).
             self._log(f"  [structured ruling failed ({e}); using text protocol]")
+            logger.info("Structured ruling failed; using text protocol", exc_info=True)
             return None
 
         return None
