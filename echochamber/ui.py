@@ -396,6 +396,24 @@ def test_provider_key(provider: str, key: str) -> str:
         return f"❌ {provider}: {str(e)[:200]}"
 
 
+def _write_private(path: Path, text: str) -> None:
+    """Write `text` to `path` so it is never readable by other users.
+
+    The file is created with mode 0600 in the same call that opens it, so
+    there is no window where it exists with default (often world-readable)
+    permissions. fchmod also tightens a pre-existing file that was looser.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+    if hasattr(os, "fchmod"):  # POSIX (Windows only from Python 3.13)
+        try:
+            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        except BaseException:
+            os.close(fd)
+            raise
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
 def save_keys(anthropic_key: str, openai_key: str, together_key: str, gemini_key: str):
     """Merge non-empty keys into .env (created owner-read-only) and the live env."""
     new_values = {
@@ -420,8 +438,7 @@ def save_keys(anthropic_key: str, openai_key: str, together_key: str, gemini_key
             lines.append(f"{env_key}={value}")
         os.environ[env_key] = value  # effective immediately, no restart
 
-    ENV_FILE.write_text("\n".join(lines) + "\n")
-    ENV_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    _write_private(ENV_FILE, "\n".join(lines) + "\n")
     saved = ", ".join(new_values)
     return key_overview_md(), f"✅ Saved {saved} to {ENV_FILE} (permissions 600). Empty fields were left unchanged."
 

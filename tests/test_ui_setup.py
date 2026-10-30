@@ -38,6 +38,27 @@ def test_save_keys_writes_env_with_restrictive_perms(env_file):
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-test123"
 
 
+def test_save_keys_tightens_preexisting_loose_env(env_file):
+    env_file.write_text("OTHER=keepme\n")
+    env_file.chmod(0o644)
+    ui.save_keys("sk-ant-test123", "", "", "")
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    assert "OTHER=keepme" in env_file.read_text()
+
+
+def test_env_file_is_created_private_without_a_chmod(env_file, monkeypatch):
+    """The mode is set when the file is created, not fixed up afterwards."""
+    old_umask = os.umask(0o022)  # a typical umask: new files 0644 by default
+    try:
+        # If the implementation fell back to write-then-chmod, the file
+        # would end up 0644 with Path.chmod disabled.
+        monkeypatch.setattr(type(env_file), "chmod", lambda self, mode: None)
+        ui.save_keys("", "", "", "AIza-test456")
+    finally:
+        os.umask(old_umask)
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
 def test_save_keys_merges_existing_lines(env_file):
     env_file.write_text("# comment\nANTHROPIC_API_KEY=old-value\nOTHER=keepme\n")
     ui.save_keys("new-value", "", "", "")
