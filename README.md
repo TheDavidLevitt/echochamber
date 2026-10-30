@@ -107,7 +107,7 @@ uv run python -m echochamber.evals \
   --apa-findings findings.jsonl
 ```
 
-Outputs a JSON report (win/loss/draw per matchup, score, actual cost) and optionally appends an AgentStable finding (`{kind, lab, model, headline, why, priceIn, priceOut}`) that a procurement agent can ingest — closing the loop: AgentStable recommends models for debates, and debates feed evidence back to AgentStable. Evals are noisy at small N; use 3+ topics and expect ~0.5 for equal models.
+Outputs a JSON report (win/loss/draw per matchup, score, actual cost) and optionally appends an AgentStable finding (`{kind, lab, model, headline, why, priceIn, priceOut}`) that a procurement agent can ingest — closing the loop: AgentStable recommends models for debates, and debates feed evidence back to AgentStable. Evals are noisy at small N; use 3+ topics and expect ~0.5 for equal models. The report puts a 95% bootstrap confidence interval on the score (vs 0.5) and on the judge's mean margin toward the candidate (vs 0), resampling whole topics so each side-swapped pair stays together, with Holm correction across the two tests; it only calls a winner when the interval excludes the null.
 
 ### AgentStable model recommendations
 

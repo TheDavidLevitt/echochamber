@@ -2,7 +2,14 @@
 
 from helpers import FakeProvider
 
-from echochamber.evals import EvalConfig, default_topics, run_eval, to_apa_finding
+from echochamber.evals import (
+    EvalConfig,
+    Matchup,
+    default_topics,
+    run_eval,
+    significance,
+    to_apa_finding,
+)
 
 
 def scripted_factory():
@@ -78,3 +85,36 @@ def test_default_topics_are_well_formed():
     topics = default_topics()
     assert len(topics) >= 5
     assert all({"topic", "position"} <= set(t) for t in topics)
+
+
+def _matchup(topic, side, result, margin):
+    return Matchup(
+        topic=topic, candidate_side=side, winner=None, candidate_result=result,
+        termination="moderator_decision", cost_usd=0.0, tokens=0,
+        candidate_margin=margin,
+    )
+
+
+def test_significance_detects_a_dominant_candidate():
+    matchups = []
+    for i in range(6):
+        matchups.append(_matchup(f"t{i}", "prosecution", "win", 60.0 + i))
+        matchups.append(_matchup(f"t{i}", "defense", "win", 50.0 + i))
+    sig = significance(matchups)
+    assert sig["score"]["reading"] == "candidate stronger"
+    assert sig["margin"]["reading"] == "candidate stronger"
+    assert sig["margin"]["ci95"][0] > 0
+    assert sig["multiple_comparisons"]["family_size"] == 2
+    assert sig == significance(matchups)  # seeded, so deterministic
+
+
+def test_significance_side_bias_is_no_difference(tmp_path):
+    """A judge that always picks the prosecution gives exactly 0.5 per topic."""
+    config = make_config(num_topics=3)
+    config.transcript_dir = str(tmp_path)
+    report = run_quiet(config)
+    sig = report["significance"]
+    assert sig["score"]["ci95"] == [0.5, 0.5]
+    assert sig["score"]["reading"] == "no detectable difference"
+    # The scripted judge uses the text protocol, so there is no strength
+    assert sig["margin"]["reading"] == "too few topics for an interval"

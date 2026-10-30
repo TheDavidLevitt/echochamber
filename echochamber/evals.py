@@ -34,6 +34,7 @@ except ImportError:
 
 from .core.runner import DebateSpec, run_debate
 from .core.costs import get_model_pricing
+from .core.stats import bootstrap_cluster_mean, holm_adjust
 from .providers import create_provider
 
 
@@ -75,6 +76,9 @@ class Matchup:
     candidate_output_tokens: int = 0  # tokens the candidate itself generated
     incumbent_output_tokens: int = 0
     transcript: str = ""
+    # Judge's verdict margin (0-100) signed toward the candidate: positive
+    # when the candidate won. None when the judge gave no structured strength.
+    candidate_margin: Optional[float] = None
 
 
 def _side_output_tokens(meter, side: str) -> int:
@@ -107,6 +111,86 @@ def _spec_for(config: EvalConfig, topic: dict, candidate_side: str) -> DebateSpe
         verbose=config.verbose,
         transcript_dir=config.transcript_dir,
     )
+
+
+def _candidate_margin(
+    winner: Optional[str], strength: Optional[int], candidate_side: str
+) -> Optional[float]:
+    """Verdict strength signed so that positive favors the candidate."""
+    if strength is None:
+        return None
+    if winner == candidate_side:
+        return float(strength)
+    if winner in ("prosecution", "defense"):
+        return -float(strength)
+    return 0.0
+
+
+ALPHA = 0.05
+BOOTSTRAP_SEED = 0
+_POINTS = {"win": 1.0, "draw": 0.5, "loss": 0.0}
+
+
+def significance(matchups: list) -> dict:
+    """Bootstrap CIs for the score and mean candidate margin, Holm-adjusted.
+
+    Two deltas are reported: score - 0.5 and mean candidate margin - 0.
+    Resampling is by topic, because a topic's two side-swapped debates
+    belong together (that pairing is what cancels side bias). Both
+    p-values are Holm-adjusted as one family, and a direction is claimed
+    only when the 95% CI excludes the null and the adjusted p < 0.05.
+    """
+    by_topic: dict = {}
+    for m in matchups:
+        by_topic.setdefault(m.topic, []).append(m)
+
+    outcomes = {
+        "score": ([[_POINTS[m.candidate_result] for m in ms] for ms in by_topic.values()], 0.5),
+        "margin": (
+            [
+                [m.candidate_margin for m in ms if m.candidate_margin is not None]
+                for ms in by_topic.values()
+            ],
+            0.0,
+        ),
+    }
+    results: dict = {}
+    for name, (clusters, null) in outcomes.items():
+        clusters = [c for c in clusters if c]
+        if len(clusters) < 2:
+            results[name] = {"reading": "too few topics for an interval"}
+            continue
+        boot = bootstrap_cluster_mean(
+            clusters, null=null, seed=f"{BOOTSTRAP_SEED}:{name}",
+        )
+        results[name] = {
+            "estimate": round(boot.estimate, 3),
+            "null": null,
+            "ci95": [round(boot.ci_low, 3), round(boot.ci_high, 3)],
+            "p": round(boot.p_value, 4),
+            "_excludes": boot.excludes_null(),
+        }
+
+    tested = [n for n in results if "p" in results[n]]
+    for name, p_adj in zip(tested, holm_adjust([results[n]["p"] for n in tested])):
+        r = results[name]
+        r["p_holm"] = round(p_adj, 4)
+        significant = r.pop("_excludes") and p_adj < ALPHA
+        r["reading"] = (
+            "no detectable difference" if not significant else
+            "candidate stronger" if r["estimate"] > r["null"] else
+            "incumbent stronger"
+        )
+    results["multiple_comparisons"] = {
+        "method": "holm-bonferroni",
+        "family_size": len(tested),
+        "alpha": ALPHA,
+        "note": (
+            "95% percentile-bootstrap CIs resampling topics (10,000 resamples, "
+            "seeded); p-values Holm-adjusted across the score and margin tests."
+        ),
+    }
+    return results
 
 
 def _score(winner: Optional[str], candidate_side: str) -> str:
@@ -155,6 +239,9 @@ def run_eval(
                     candidate_output_tokens=_side_output_tokens(outcome.usage, side),
                     incumbent_output_tokens=_side_output_tokens(outcome.usage, incumbent_side),
                     transcript=str(outcome.transcript_path or ""),
+                    candidate_margin=_candidate_margin(
+                        outcome.result.winner, outcome.result.verdict_strength, side,
+                    ),
                 )
             except Exception as e:
                 matchup = Matchup(
@@ -205,10 +292,20 @@ def run_eval(
         "losses": losses,
         "draws": draws,
         "score": round(score, 3),
+        "significance": significance(matchups),
         "verbosity": verbosity,
         "total_cost_usd": round(sum(m.cost_usd for m in matchups), 4),
         "total_tokens": sum(m.tokens for m in matchups),
     }
+
+
+def _score_ci_note(report: dict) -> str:
+    """Score interval for the finding text, or nothing if unavailable."""
+    r = report.get("significance", {}).get("score", {})
+    if "ci95" not in r:
+        return ""
+    lo, hi = r["ci95"]
+    return f"Score 95% CI {lo}-{hi} ({r['reading']}). "
 
 
 def _verbosity_note(verbosity: dict) -> str:
@@ -219,6 +316,24 @@ def _verbosity_note(verbosity: dict) -> str:
     if verbosity.get("candidate_tokens_per_win"):
         note += f"; {verbosity['candidate_tokens_per_win']:,} output tokens per win"
     return note + "."
+
+
+def _significance_lines(sig: dict) -> list[str]:
+    """Human-readable CI lines for the score and margin deltas."""
+    lines = []
+    for name, label in (("score", "Score"), ("margin", "Mean candidate margin")):
+        r = sig.get(name)
+        if not r:
+            continue
+        if "ci95" not in r:
+            lines.append(f"{label}: {r['reading']}")
+            continue
+        lo, hi = r["ci95"]
+        lines.append(
+            f"{label} {r['estimate']} (95% CI {lo} to {hi}, null {r['null']}, "
+            f"Holm p {r['p_holm']:.3g}): {r['reading']}"
+        )
+    return lines
 
 
 def to_apa_finding(report: dict) -> dict:
@@ -242,7 +357,8 @@ def to_apa_finding(report: dict) -> dict:
         "why": (
             f"Won {report['wins']} of {n} adversarial debates against the incumbent "
             f"under judge {report['judge']} (side-balanced, {report['rounds_per_debate']} "
-            f"round(s) each). {_verbosity_note(report.get('verbosity', {}))} "
+            f"round(s) each). {_score_ci_note(report)}"
+            f"{_verbosity_note(report.get('verbosity', {}))} "
             f"Eval cost ${report['total_cost_usd']}."
         ),
         "priceIn": pricing.input_per_million,
@@ -312,6 +428,8 @@ def main():
 
     print(f"\nRESULT: {report['candidate']} scored {report['score']} vs {report['incumbent']}")
     print(f"  {report['wins']}W / {report['losses']}L / {report['draws']}D")
+    for line in _significance_lines(report.get("significance", {})):
+        print(f"  {line}")
     print(f"  {_verbosity_note(report['verbosity'])}")
     v = report["verbosity"]
     print(f"  Output tokens: candidate {v['candidate_output_tokens']:,} "
