@@ -6,7 +6,7 @@
 https://github.com/user-attachments/assets/79130956-d2f3-47c2-b596-e12a99ce815d
 
 ### 📹 Evidence ablation: type evidence, run an 80-debate salience campaign
-See [docs/demo-ablation.mp4](docs/demo-ablation.mp4) — or the walkthrough below.
+[Watch demo-ablation.mp4](https://github.com/TheDavidLevitt/echochamber/releases/download/media-v1/demo-ablation.mp4) (2.4 MB) — or read the walkthrough below. All demo videos are attached to the [Demo media release](https://github.com/TheDavidLevitt/echochamber/releases/tag/media-v1).
 
 ### 📹 Setup & configuration walkthrough
 https://github.com/user-attachments/assets/dc0125e9-2728-4452-8c8e-f8a5f76daa0c
