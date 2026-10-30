@@ -48,6 +48,7 @@ except ImportError:
 
 from .core.evidence import EvidenceStore
 from .core.runner import DebateSpec, run_debate
+from .core.stats import bootstrap_mean_diff, holm_adjust
 from .providers import create_provider
 
 
@@ -306,14 +307,41 @@ def run_ablation(
     return report
 
 
+# Significance level for the salience readings. A document is only labeled
+# as moving the verdict when its effect survives both checks below.
+ALPHA = 0.05
+BOOTSTRAP_SEED = 0
+CORRECTION_NOTE = (
+    "Readings use a 95% percentile-bootstrap CI on the margin delta "
+    "(10,000 resamples, seeded) and Holm-Bonferroni adjusted p-values across "
+    "all scenarios in this report; a direction is shown only when the CI "
+    "excludes 0 and the adjusted p < 0.05."
+)
+
+
 def summarize(
     records: list, scenarios: list, reference_name: str, config: AblationConfig
 ) -> dict:
-    """Per-scenario stats and salience deltas against the reference."""
+    """Per-scenario stats and salience deltas against the reference.
+
+    Each salience delta gets a bootstrap confidence interval. Because one
+    report compares every ablated scenario against the same baseline, the
+    p-values are Holm-adjusted across that family before any scenario is
+    labeled as helping either side.
+    """
+    def ok_rows(name: str) -> list:
+        return [
+            r for r in records
+            if r["scenario"] == name and not str(r["termination"]).startswith("error")
+        ]
+
+    def margins_for(name: str) -> list:
+        return [r["margin"] for r in ok_rows(name) if r["margin"] is not None]
+
     def stats_for(name: str) -> dict:
-        rows = [r for r in records if r["scenario"] == name and not str(r["termination"]).startswith("error")]
+        rows = ok_rows(name)
         n = len(rows)
-        margins = [r["margin"] for r in rows if r["margin"] is not None]
+        margins = margins_for(name)
         wins = {"prosecution": 0, "defense": 0, "other": 0}
         for r in rows:
             wins[r["winner"] if r["winner"] in ("prosecution", "defense") else "other"] += 1
@@ -335,21 +363,45 @@ def summarize(
 
     per_scenario = {}
     ref = stats_for(reference_name)
+    ref_margins = margins_for(reference_name)
+    tested = []  # scenario names with a bootstrap p-value, in report order
     for scenario in scenarios:
         s = stats_for(scenario.name)
         if scenario.name != reference_name and s["mean_margin"] is not None and ref["mean_margin"] is not None:
-            delta = round(s["mean_margin"] - ref["mean_margin"], 1)
-            s["salience_margin_delta"] = delta
-            s["reading"] = (
-                "removal helps prosecution" if delta > 0 else
-                "removal helps defense" if delta < 0 else "no effect"
+            margins = margins_for(scenario.name)
+            s["salience_margin_delta"] = round(
+                sum(margins) / len(margins) - sum(ref_margins) / len(ref_margins), 1
             )
+            if len(margins) >= 2 and len(ref_margins) >= 2:
+                boot = bootstrap_mean_diff(
+                    margins, ref_margins,
+                    seed=f"{BOOTSTRAP_SEED}:{reference_name}:{scenario.name}",
+                )
+                s["salience_ci95"] = [round(boot.ci_low, 1), round(boot.ci_high, 1)]
+                s["salience_p"] = round(boot.p_value, 4)
+                s["_ci_excludes_zero"] = boot.excludes_null()
+                tested.append(scenario.name)
+            else:
+                s["reading"] = "too few runs for an interval"
         if scenario.name != reference_name and s["prosecution_win_rate"] is not None and ref["prosecution_win_rate"] is not None:
             s["salience_win_rate_delta"] = round(
                 s["prosecution_win_rate"] - ref["prosecution_win_rate"], 3
             )
         s["exclude"] = list(scenario.exclude)
         per_scenario[scenario.name] = s
+
+    # Holm-Bonferroni across every scenario that got a p-value
+    adjusted = holm_adjust([per_scenario[name]["salience_p"] for name in tested])
+    for name, p_adj in zip(tested, adjusted):
+        s = per_scenario[name]
+        s["salience_p_holm"] = round(p_adj, 4)
+        significant = s.pop("_ci_excludes_zero") and p_adj < ALPHA
+        delta = s["salience_margin_delta"]
+        s["reading"] = (
+            "no detectable effect" if not significant else
+            "removal helps prosecution" if delta > 0 else
+            "removal helps defense"
+        )
 
     errors = [r for r in records if str(r["termination"]).startswith("error")]
     return {
@@ -359,6 +411,12 @@ def summarize(
         "position": config.position,
         "reference": reference_name,
         "scenarios": per_scenario,
+        "multiple_comparisons": {
+            "method": "holm-bonferroni",
+            "family_size": len(tested),
+            "alpha": ALPHA,
+            "note": CORRECTION_NOTE,
+        },
         "total_debates": len(records),
         "errored_debates": len(errors),
         "total_cost_usd": round(sum(r["cost_usd"] for r in records), 4),
@@ -374,8 +432,8 @@ def format_report(report: dict) -> str:
         f"Position: *{report['position']}* — margin > 0 favors the prosecution. "
         f"Salience Δ = scenario margin − `{report['reference']}` margin.",
         "",
-        "| Scenario | n | P wins | D wins | mean margin ± SE | salience Δ | reading |",
-        "|---|---|---|---|---|---|---|",
+        "| Scenario | n | P wins | D wins | mean margin ± SE | salience Δ [95% CI] | p (Holm) | reading |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for name, s in report["scenarios"].items():
         margin = (
@@ -384,13 +442,25 @@ def format_report(report: dict) -> str:
             else (f"{s['mean_margin']:+.1f}" if s["mean_margin"] is not None else "—")
         )
         delta = s.get("salience_margin_delta")
+        ci = s.get("salience_ci95")
+        delta_str = "—" if delta is None else f"{delta:+.1f}"
+        if ci:
+            delta_str += f" [{ci[0]:+.1f}, {ci[1]:+.1f}]"
+        p_holm = s.get("salience_p_holm")
         lines.append(
             f"| {name} | {s['n']} | {s['prosecution_wins']} | {s['defense_wins']} "
-            f"| {margin} | {'—' if delta is None else f'{delta:+.1f}'} "
+            f"| {margin} | {delta_str} "
+            f"| {'—' if p_holm is None else f'{p_holm:.3g}'} "
             f"| {s.get('reading', 'reference')} |"
         )
+    mc = report.get("multiple_comparisons")
+    lines += [""]
+    if mc:
+        lines += [
+            f"Multiple comparisons: {mc['note']} Family size: {mc['family_size']}.",
+            "",
+        ]
     lines += [
-        "",
         f"Total: {report['total_debates']} debates, {report['total_tokens']:,} tokens, "
         f"${report['total_cost_usd']}"
         + (f" · {report['errored_debates']} errored" if report["errored_debates"] else ""),

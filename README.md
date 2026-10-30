@@ -161,6 +161,12 @@ condition). Verdicts are noisy — treat `--runs 20` as the floor for real
 conclusions, and remember models may know public facts from pretraining;
 ablation is sharpest on private or synthetic case facts.
 
+Each salience Δ is reported with a 95% bootstrap confidence interval, and
+because one report compares many documents against the same baseline, the
+p-values are Holm–Bonferroni corrected across that family. A document is
+only labeled as helping one side when its effect survives both; otherwise
+the report says "no detectable effect".
+
 ### Batch runs
 
 ```bash
