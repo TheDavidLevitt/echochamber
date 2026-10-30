@@ -94,7 +94,9 @@ class DocumentPreprocessor:
     Preprocesses documents based on configured strategy.
 
     For summarization, requires an LLM provider.
-    For RAG, uses local embeddings (sentence-transformers).
+    For RAG, chunks go into an in-memory ChromaDB collection using Chroma's
+    default embedding function (all-MiniLM-L6-v2 run locally via ONNX
+    Runtime, downloaded on first use); sentence-transformers is not used.
     """
 
     def __init__(

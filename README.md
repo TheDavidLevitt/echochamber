@@ -193,6 +193,7 @@ echochamber/
 ├── cli.py                  # Thin argparse layer over the runner
 ├── ui.py                   # Gradio GUI: live status, token/cost ticker, stop button
 ├── evals.py                # Debates-as-benchmarks harness → report + AgentStable finding
+├── ablation.py             # Evidence-salience campaigns: leave-one-out, resumable, CIs
 ├── recommendations.py      # AgentStable export → top-2 model picks per debate role
 ├── batch.py                # Thread-pool multi-run orchestration + cost gates
 ├── core/
@@ -204,14 +205,15 @@ echochamber/
 │   ├── evidence.py         # Case folder loading (txt/md/json/csv/pdf)
 │   ├── preprocessor.py     # full / summarize / RAG context strategies
 │   ├── transcript.py       # Markdown + JSON transcript writing
+│   ├── stats.py            # Bootstrap CIs + Holm correction for ablation/eval reports
 │   └── costs.py            # Estimates, priced from data/pricing.json
 ├── data/pricing.json       # Per-model $/1M token table (edit freely)
 ├── providers/
 │   ├── base.py             # Message / ToolDef / ToolCall / LLMResponse protocol
-│   ├── retry.py            # Centralized exponential backoff
+│   ├── retry.py            # Centralized retry: typed SDK errors, Retry-After, full-jitter backoff
 │   ├── openai_compat.py    # One implementation for OpenAI, Together, LM Studio
 │   ├── anthropic.py        # Native tools via tool_use/tool_result blocks
-│   └── gemini.py           # Text-only (sentinel fallback) on the legacy SDK
+│   └── gemini.py           # google-genai SDK (Gemini API or Vertex AI), native tools + streaming
 ├── roles/prompts.py        # Prosecution / Defense / Moderator system prompts
 └── tools/search.py         # DuckDuckGo search + web_search ToolDef + sentinel parsing
 tests/                      # Fake-provider suite for the orchestration logic
@@ -234,7 +236,7 @@ What this project taught me, now folded back in:
 - ~~Hardcoded pricing in code~~ → `data/pricing.json`.
 - ~~Per-callsite try/except~~ → centralized retry with backoff.
 
-Still open: Gemini native tools (needs the `google-genai` SDK migration), streaming output, and a live pricing source instead of a static table.
+Since shipped: Gemini native tools (via the `google-genai` SDK) and token streaming for every provider. Still open: a live pricing source instead of a static table.
 
 ## License
 
