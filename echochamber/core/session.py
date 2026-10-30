@@ -219,146 +219,13 @@ class CourtSession:
         self._running = True
         self.transcript = Transcript(case_topic=topic)
 
-        # Opening context for all parties
-        case_context = f"""
-CASE TOPIC: {topic}
+        case_context = self._build_case_context(topic, prosecution_position)
+        self._log_session_start(topic, prosecution_position)
 
-PROSECUTION POSITION: {prosecution_position}
-
-DEFENSE POSITION: Argue against the prosecution's position.
-
-The debate will proceed in rounds. Each round:
-1. Prosecution presents arguments
-2. Defense responds
-3. Moderator evaluates
-
-The debate ends when:
-- Maximum rounds ({self.config.max_rounds}) reached
-- A party concedes
-- The moderator decides further debate is unnecessary
-"""
-
-        # Add shared evidence context if available
-        shared_evidence = ""
-        if self.evidence:
-            shared_evidence = self.evidence.get_shared_context()
-            if shared_evidence:
-                case_context += f"\n{shared_evidence}"
-
-        self._log(f"Starting court session on: {topic}")
-        self._log(f"Prosecution argues: {prosecution_position}")
-        if self.evidence:
-            self._log(self.evidence.summary())
-        self._log("-" * 50)
-
-        round_num = 0
-        termination_reason = TerminationReason.MAX_ROUNDS
-        winner = None
-
-        try:
-            # Moderator opens the session
-            self._phase("opening", self.moderator)
-            opening = self._get_moderator_opening(case_context)
-            self._record_turn(self.moderator.name, "moderator", opening)
-
-            for round_num in range(1, self.config.max_rounds + 1):
-                self.transcript.total_rounds = round_num
-                self._log(f"\n=== ROUND {round_num} ===\n")
-
-                if self._should_force_verdict():
-                    termination_reason = TerminationReason.FORCED_VERDICT
-                    break
-
-                # Prosecution argues
-                self._phase(f"round {round_num}: prosecution", self.prosecution)
-                prosecution_response = self._get_advocate_argument(
-                    self.prosecution, case_context, round_num
-                )
-                self._record_turn(
-                    self.prosecution.name, "prosecution", prosecution_response, round_num
-                )
-
-                # Check for concession
-                if self.config.allow_concession and self._check_concession(prosecution_response):
-                    termination_reason = TerminationReason.CONCESSION
-                    winner = "defense"
-                    break
-
-                if self._should_force_verdict():
-                    termination_reason = TerminationReason.FORCED_VERDICT
-                    break
-
-                # Defense responds
-                self._phase(f"round {round_num}: defense", self.defense)
-                defense_response = self._get_advocate_argument(
-                    self.defense, case_context, round_num
-                )
-                self._record_turn(
-                    self.defense.name, "defense", defense_response, round_num
-                )
-
-                # Check for concession
-                if self.config.allow_concession and self._check_concession(defense_response):
-                    termination_reason = TerminationReason.CONCESSION
-                    winner = "prosecution"
-                    break
-
-                if self._should_force_verdict():
-                    termination_reason = TerminationReason.FORCED_VERDICT
-                    break
-
-                # Moderator evaluates
-                if self.config.require_moderator_approval:
-                    self._phase(f"round {round_num}: evaluation", self.moderator)
-                    should_continue, mod_winner, reasoning = self._get_moderator_evaluation(
-                        case_context, round_num
-                    )
-                    self._record_turn(
-                        self.moderator.name, "moderator", reasoning, round_num
-                    )
-
-                    if not should_continue:
-                        termination_reason = TerminationReason.MODERATOR_DECISION
-                        winner = mod_winner
-                        break
-
-        except TokenBudgetExceeded as e:
-            self._log(f"Token budget reached: {e}")
-            termination_reason = TerminationReason.TOKEN_BUDGET
-        except SessionCancelled:
-            self._log("Session cancelled by user.")
-            termination_reason = TerminationReason.CANCELLED
-        except Exception as e:
-            # Top-level session guard: any failure ends the debate with an
-            # ERROR termination and a transcript, instead of losing the run.
-            self._log(f"Error during session: {e}")
-            logger.warning("Session ended by error", exc_info=True)
-            termination_reason = TerminationReason.ERROR
-            self.transcript.add_entry(
-                speaker="SYSTEM",
-                role="system",
-                content=f"Session terminated due to error: {e}",
-            )
-
-        # Get final ruling (may update winner if not already set). Skipped for
-        # budget/cancel stops — the whole point is to stop spending tokens.
-        verdict_strength = None
-        if termination_reason in (TerminationReason.TOKEN_BUDGET, TerminationReason.CANCELLED):
-            final_ruling = (
-                f"Session halted ({termination_reason.value}) before a final ruling could be made."
-            )
-            final_winner = winner
-        else:
-            self._phase("final ruling", self.moderator)
-            try:
-                final_ruling, final_winner, verdict_strength = self._get_final_ruling(
-                    case_context, termination_reason, winner
-                )
-            except TokenBudgetExceeded as e:
-                self._log(f"Token budget reached during final ruling: {e}")
-                termination_reason = TerminationReason.TOKEN_BUDGET
-                final_ruling = "Session halted (token_budget) during the final ruling."
-                final_winner = winner
+        termination_reason, winner, round_num = self._run_rounds(case_context)
+        final_ruling, final_winner, verdict_strength, termination_reason = (
+            self._conclude(case_context, termination_reason, winner)
+        )
         self._record_turn(self.moderator.name, "moderator", final_ruling)
 
         # Use updated winner from final ruling if available
@@ -380,6 +247,174 @@ The debate ends when:
             rounds_completed=round_num,
             verdict_strength=verdict_strength,
         )
+
+    def _build_case_context(self, topic: str, prosecution_position: str) -> str:
+        """Opening context shared by all parties, plus any shared evidence."""
+        case_context = f"""
+CASE TOPIC: {topic}
+
+PROSECUTION POSITION: {prosecution_position}
+
+DEFENSE POSITION: Argue against the prosecution's position.
+
+The debate will proceed in rounds. Each round:
+1. Prosecution presents arguments
+2. Defense responds
+3. Moderator evaluates
+
+The debate ends when:
+- Maximum rounds ({self.config.max_rounds}) reached
+- A party concedes
+- The moderator decides further debate is unnecessary
+"""
+
+        # Add shared evidence context if available
+        if self.evidence:
+            shared_evidence = self.evidence.get_shared_context()
+            if shared_evidence:
+                case_context += f"\n{shared_evidence}"
+        return case_context
+
+    def _log_session_start(self, topic: str, prosecution_position: str) -> None:
+        self._log(f"Starting court session on: {topic}")
+        self._log(f"Prosecution argues: {prosecution_position}")
+        if self.evidence:
+            self._log(self.evidence.summary())
+        self._log("-" * 50)
+
+    def _run_rounds(
+        self, case_context: str
+    ) -> tuple[TerminationReason, Optional[str], int]:
+        """Opening plus the round loop, as (termination_reason, winner, rounds).
+
+        Budget stops, cancellation and errors end the loop here; they are
+        turned into a termination reason rather than propagated.
+        """
+        round_num = 0
+        termination_reason = TerminationReason.MAX_ROUNDS
+        winner = None
+
+        try:
+            # Moderator opens the session
+            self._phase("opening", self.moderator)
+            opening = self._get_moderator_opening(case_context)
+            self._record_turn(self.moderator.name, "moderator", opening)
+
+            for round_num in range(1, self.config.max_rounds + 1):
+                stop = self._run_round(case_context, round_num)
+                if stop:
+                    termination_reason, winner = stop
+                    break
+
+        except TokenBudgetExceeded as e:
+            self._log(f"Token budget reached: {e}")
+            termination_reason = TerminationReason.TOKEN_BUDGET
+        except SessionCancelled:
+            self._log("Session cancelled by user.")
+            termination_reason = TerminationReason.CANCELLED
+        except Exception as e:
+            # Top-level session guard: any failure ends the debate with an
+            # ERROR termination and a transcript, instead of losing the run.
+            self._log(f"Error during session: {e}")
+            logger.warning("Session ended by error", exc_info=True)
+            termination_reason = TerminationReason.ERROR
+            self.transcript.add_entry(
+                speaker="SYSTEM",
+                role="system",
+                content=f"Session terminated due to error: {e}",
+            )
+
+        return termination_reason, winner, round_num
+
+    def _run_round(
+        self, case_context: str, round_num: int
+    ) -> Optional[tuple[TerminationReason, Optional[str]]]:
+        """One round: prosecution, defense, moderator evaluation.
+
+        Returns (termination_reason, winner) if the debate should stop after
+        this round, or None to continue.
+        """
+        self.transcript.total_rounds = round_num
+        self._log(f"\n=== ROUND {round_num} ===\n")
+
+        if self._should_force_verdict():
+            return TerminationReason.FORCED_VERDICT, None
+
+        # Prosecution argues
+        self._phase(f"round {round_num}: prosecution", self.prosecution)
+        prosecution_response = self._get_advocate_argument(
+            self.prosecution, case_context, round_num
+        )
+        self._record_turn(
+            self.prosecution.name, "prosecution", prosecution_response, round_num
+        )
+
+        # Check for concession
+        if self.config.allow_concession and self._check_concession(prosecution_response):
+            return TerminationReason.CONCESSION, "defense"
+
+        if self._should_force_verdict():
+            return TerminationReason.FORCED_VERDICT, None
+
+        # Defense responds
+        self._phase(f"round {round_num}: defense", self.defense)
+        defense_response = self._get_advocate_argument(
+            self.defense, case_context, round_num
+        )
+        self._record_turn(
+            self.defense.name, "defense", defense_response, round_num
+        )
+
+        # Check for concession
+        if self.config.allow_concession and self._check_concession(defense_response):
+            return TerminationReason.CONCESSION, "prosecution"
+
+        if self._should_force_verdict():
+            return TerminationReason.FORCED_VERDICT, None
+
+        # Moderator evaluates
+        if self.config.require_moderator_approval:
+            self._phase(f"round {round_num}: evaluation", self.moderator)
+            should_continue, mod_winner, reasoning = self._get_moderator_evaluation(
+                case_context, round_num
+            )
+            self._record_turn(
+                self.moderator.name, "moderator", reasoning, round_num
+            )
+
+            if not should_continue:
+                return TerminationReason.MODERATOR_DECISION, mod_winner
+
+        return None
+
+    def _conclude(
+        self,
+        case_context: str,
+        termination_reason: TerminationReason,
+        winner: Optional[str],
+    ) -> tuple[str, Optional[str], Optional[int], TerminationReason]:
+        """Final ruling as (ruling, winner, strength, termination_reason).
+
+        Skipped for budget/cancel stops — the whole point is to stop spending
+        tokens. A budget stop during the ruling itself updates the
+        termination reason.
+        """
+        if termination_reason in (TerminationReason.TOKEN_BUDGET, TerminationReason.CANCELLED):
+            final_ruling = (
+                f"Session halted ({termination_reason.value}) before a final ruling could be made."
+            )
+            return final_ruling, winner, None, termination_reason
+
+        self._phase("final ruling", self.moderator)
+        try:
+            final_ruling, final_winner, verdict_strength = self._get_final_ruling(
+                case_context, termination_reason, winner
+            )
+        except TokenBudgetExceeded as e:
+            self._log(f"Token budget reached during final ruling: {e}")
+            final_ruling = "Session halted (token_budget) during the final ruling."
+            return final_ruling, winner, None, TerminationReason.TOKEN_BUDGET
+        return final_ruling, final_winner, verdict_strength, termination_reason
 
     def _get_evidence_context_for_role(
         self,
